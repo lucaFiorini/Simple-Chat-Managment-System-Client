@@ -69,32 +69,83 @@ void sendMsg(SOCKET *s, enum CommType req,unsigned char * msg) {
 }
 
 int update;
+int keyboardBuffLen = 0;
 char keyboardBuff[DEFAULT_BUFLEN];
-void* deferredInput() {
 
+int getch_noblock() {
+    if (_kbhit())
+        return _getch();
+    else
+        return -1;
+
+}
+
+void safePrint(int row,int col, char* str) {
+    static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(mutex);
+    printf("\033[%d;%dH%s",row,col,str);
+    pthread_mutex_unlock(mutex);
+
+}
+
+void* deferredInput(void * sin) {
+    SOCKET s = *(SOCKET*)sin;
     while (1) {
-        char c = getch();
+        
+        char c = getch_noblock();
+        if (c != -1 && keyboardBuffLen < DEFAULT_BUFLEN-1) {
+            switch (c) {
+            case '\n':
+                sendMsg(s, BROAD_MSG, keyboardBuff);
+                keyboardBuffLen = 0;
+                keyboardBuff[0] = '\0';
+                break;
+            case 127: case 8: //backspace
+                keyboardBuff[--keyboardBuffLen] = 0;
+                printf("%c",c);
+                break;
+            default:
+                keyboardBuff[keyboardBuffLen++] = c;
+                keyboardBuff[keyboardBuffLen] = '\0';
+                printf("%c", c);
+            }
 
+        }
 
     }
 
 }
 void chatHandler(SOCKET s, char* username) {
 
-    long len;
-    ioctlsocket(s, FIONREAD, &len);
     pthread_t tid;
     pthread_create(&tid, NULL, deferredInput, NULL);
     
-    char inputBuf[DEFAULT_BUFLEN];
+    unsigned char inputBuf[DEFAULT_BUFLEN];
     do {
-        Sleep(100);
-        int iRecv = recv(s, inputBuf, DEFAULT_BUFLEN, NULL);
-        
+
+        int iRecv = recv(s, inputBuf, DEFAULT_BUFLEN, &s);
         if (iRecv > 0) {
+            enum CommType type = inputBuf[0];
+            char msg = inputBuf + 1;
+            if (iRecv > 1)
+                switch (type) {
+                case CLIENT_CONNECTED_MSG: 
+                        printf("A new user has connected to the lobby %s\n", inputBuf + 1);
+                break;
+                
+                }
 
-            printf("%s\n", inputBuf + 1);
-
+        }
+        else if (iRecv == 0) {
+            printf("You have been disconnected by the server");
+            closesocket(s);
+            return;
+        }
+        else if (iRecv < 0) {
+            printf("[SERVER ERROR]");
+            printf("socket failed with error: %ld\n", WSAGetLastError());
+            closesocket(s);
+            return;
         }
 
 
@@ -266,7 +317,7 @@ int __cdecl main(int argc, unsigned char** argv){
         printf("Lobby code \t Connected Clients\n");
 
     do {
-
+        
         iResult = recv(ConnectSocket, recvbuf, recvbuflen, 0);
         
         enum CommType t = recvbuf[0];
@@ -282,13 +333,33 @@ int __cdecl main(int argc, unsigned char** argv){
             if (iResult > 1)
                 printf("%s\n", msg);
 
-            if (t == OK && action == JOIN_LOBBY) {
+            if (action == JOIN_LOBBY) {
 
-                printf("You have joined lobby %s\n", argv[3]);
-                chatHandler(ConnectSocket, argv[4]);
-                closesocket(ConnectSocket);
-                WSACleanup();
-                return;
+                if (t == OK) {
+                    printf("You have joined lobby %s\n", argv[3]);
+                    chatHandler(ConnectSocket, argv[4]);
+                    closesocket(ConnectSocket);
+                    WSACleanup();
+                    return;
+                }
+                else if (t == INVALID_CODE) {
+                    printf("Lobby %s not found in server\n", argv[3]);
+                    closesocket(ConnectSocket);
+                    WSACleanup();
+                    return;
+                }
+                else if (t == LOBBY_FULL) {
+                    printf("Lobby %s is full\n", argv[3]);
+                    closesocket(ConnectSocket);
+                    WSACleanup();
+                    return;
+                }
+                else {
+                    printf("unspecified error");
+                    closesocket(ConnectSocket);
+                    WSACleanup();
+                    return;
+                }
 
             }
 
