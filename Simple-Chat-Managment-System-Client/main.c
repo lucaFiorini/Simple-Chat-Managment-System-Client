@@ -64,44 +64,91 @@ enum CommType {
 
 
 
-void sendMsg(SOCKET *s, enum CommType req,unsigned char * msg) {
+void sendMsg(SOCKET s, enum CommType code,unsigned char * msg) {
     
+    unsigned char sendBuf[DEFAULT_BUFLEN];
+    int len = 0;
 
+    if (msg != NULL) {
+
+        len = strnlen(msg, DEFAULT_BUFLEN - 2);
+        strcpy_s(sendBuf + 1, DEFAULT_BUFLEN - 1, msg);
+
+    }
+
+    if (len > 0) len++; //making sure we send terminator NULL
+
+    sendBuf[0] = code;
+    int iResult = send(s, sendBuf, len + 1, 0);
+    if (code > DISCON_CUTOFF) {
+        closesocket(s);
+        pthread_exit(PTHREAD_CANCELED);
+    }
 
 }
+pthread_mutex_t printfMutex = PTHREAD_MUTEX_INITIALIZER;
 
 int update;
+int currentRow = 0;
 int keyboardBuffLen = 0;
 char keyboardBuff[DEFAULT_BUFLEN];
 
-void safePrint(int row,int col, char* str) {
-    static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-    pthread_mutex_lock(mutex);
-    printf("\033[%d;%dH%s",row,col,str);
-    pthread_mutex_unlock(mutex);
+int STOPFLAG = 0;
+
+void moveCurs(int row,int col) {
+    
+    printf("\033[%d;%dH",row,col);
 
 }
 
 void* deferredInput(void * sin) {
     SOCKET s = *(SOCKET*)sin;
-    while (1) {
+    while (STOPFLAG == 0) {
         
         char c = getch();
+
+        pthread_mutex_lock(&printfMutex);
+
         if (c != -1 && keyboardBuffLen < DEFAULT_BUFLEN-1) {
+
             switch (c) {
-            case '\n':
+            case '\n': case '\r':
+
+                if (keyboardBuffLen == 0) 
+                    break;
+
+                if (keyboardBuff[0] == '/') {
+
+                    if (strncmp(keyboardBuff+1, "leave", DEFAULT_BUFLEN) == 0) {
+
+                        sendMsg(s, CLIEND_DISCONNECTED_MSG, NULL);
+                        closesocket(s);
+                        STOPFLAG = 1;
+
+                    };
+
+                }
+
+                moveCurs(currentRow,0);
+                printf("current user > %s\n", keyboardBuff);
+                currentRow++;
+
                 sendMsg(s, BROAD_MSG, keyboardBuff);
                 keyboardBuffLen = 0;
                 keyboardBuff[0] = '\0';
-                break;
+            
+            break;
+
             case 127: case 8: //backspace
                 if (keyboardBuffLen > 0) {
 
                     keyboardBuff[--keyboardBuffLen] = 0;
-                    printf("%c", c);
+
+                    printf("%c %c", c,c);
 
                 }
-                break;
+            
+            break;
             default:
                 keyboardBuff[keyboardBuffLen++] = c;
                 keyboardBuff[keyboardBuffLen] = '\0';
@@ -110,33 +157,104 @@ void* deferredInput(void * sin) {
 
         }
 
+        pthread_mutex_unlock(&printfMutex);
+
     }
 
 }
+
 void chatHandler(SOCKET s, char* username) {
 
     pthread_t tid;
-    pthread_create(&tid, NULL, deferredInput, NULL);
+    pthread_create(&tid, NULL, deferredInput, &s);
     
     unsigned char inputBuf[DEFAULT_BUFLEN];
     do {
-        printf("[SERVER ERROR] ");
-        printf("socket failed with error: %ld\n", WSAGetLastError());
-        int iRecv = recv(s, inputBuf, DEFAULT_BUFLEN, &s);
+       
+        int iRecv = recv(s, inputBuf, DEFAULT_BUFLEN, NULL);
         if (iRecv > 0) {
             enum CommType type = inputBuf[0];
-            char msg = inputBuf + 1;
-            if (iRecv > 1)
+            unsigned char* msg = inputBuf + 1;
+            if (iRecv > 1) {
+
                 switch (type) {
-                case CLIENT_CONNECTED_MSG: 
-                        printf("A new user has connected to the lobby %s\n", inputBuf + 1);
-                break;
-                
+
+                case CLIENT_CONNECTED_MSG:
+
+                    pthread_mutex_lock(&printfMutex);
+
+                    moveCurs(currentRow, 0);
+                    printf("[%s has joined the lobby]", inputBuf + 1);
+
+                    for (int i = 0; i < keyboardBuffLen; i++)
+                        printf(" ");
+
+                    currentRow++;
+
+                    moveCurs(currentRow, 0);
+
+                    printf("%s", keyboardBuff);
+
+                    pthread_mutex_unlock(&printfMutex);
+
+                    break;
+                case BROAD_MSG:
+                {
+                    int i = 0;
+                    for (; i < DEFAULT_BUFLEN; i++) {
+                        if (msg[i] == ',') {
+                            msg[i] = '\0';
+                            break;
+                        }
+
+                    }
+
+                    pthread_mutex_lock(&printfMutex);
+
+                    moveCurs(currentRow, 0);
+
+                    printf("%s > %s\n", msg, msg + i + 1);
+
+                    for (int i = 0; i < keyboardBuffLen; i++)
+                        printf(" ");
+
+                    currentRow++;
+
+                    moveCurs(currentRow, 0);
+
+                    printf("%s", keyboardBuff);
+
+                    pthread_mutex_unlock(&printfMutex);
+
                 }
+                break;
+                case CLIEND_DISCONNECTED_MSG:
+
+                    pthread_mutex_lock(&printfMutex);
+
+                    moveCurs(currentRow, 0);
+                    printf("[%s has left the lobby]", inputBuf + 1);
+
+                    for (int i = 0; i < keyboardBuffLen; i++)
+                        printf(" ");
+
+                    currentRow++;
+
+                    moveCurs(currentRow, 0);
+
+                    printf("%s", keyboardBuff);
+
+                    pthread_mutex_unlock(&printfMutex);
+
+                    break;
+
+                }
+
+            }
 
         }
         else if (iRecv == 0) {
-            printf("You have been disconnected by the server");
+            printf("You have been disconnected by the server\n");
             closesocket(s);
             return;
         }
@@ -148,7 +266,7 @@ void chatHandler(SOCKET s, char* username) {
         }
 
 
-    } while (1);
+    } while (STOPFLAG == 0);
 
 };
 
@@ -161,6 +279,12 @@ void printMisuseError() {
 }
 
 int __cdecl main(int argc, unsigned char** argv){
+
+    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO cbsi;
+    GetConsoleScreenBufferInfo(hConsole, &cbsi);
+
+    currentRow = cbsi.dwCursorPosition.Y+1;
 
     if (argc < 3) {
         printMisuseError();
@@ -324,6 +448,9 @@ int __cdecl main(int argc, unsigned char** argv){
                 if (t == OK) {
 
                     printf("You have joined lobby %s\n", argv[3]);
+                    currentRow++;
+                    moveCurs(currentRow, 0);
+
                     chatHandler(ConnectSocket, argv[4]);
                     closesocket(ConnectSocket);
                     WSACleanup();
@@ -344,7 +471,7 @@ int __cdecl main(int argc, unsigned char** argv){
                     return;
                 }
                 else {
-                    printf("unspecified error");
+                    printf("unspecified error %d",t);
                     closesocket(ConnectSocket);
                     WSACleanup();
                     return;
