@@ -28,10 +28,12 @@ enum CommType {
     OK = 0,
     GENERAL_SERVICE_MSG = 1,
     CLIENT_CONNECTED_MSG = 2,
-    CLIEND_DISCONNECTED_MSG = 3,
+    CLIENT_DISCONNECTED_MSG = 3,
 
     BROAD_MSG = 20,
     PRIV_USER_MSG = 21,
+
+    CALCULATE = 30,
 
     PING = 40,
 
@@ -121,9 +123,14 @@ void* deferredInput(void * sin) {
 
                     if (strncmp(keyboardBuff+1, "leave", DEFAULT_BUFLEN) == 0) {
 
-                        sendMsg(s, CLIEND_DISCONNECTED_MSG, NULL);
+                        sendMsg(s, CLIENT_DISCONNECTED_MSG, NULL);
                         closesocket(s);
                         STOPFLAG = 1;
+
+                    }
+                    else if (strncmp(keyboardBuff+1, "calculate", 9) == 0) {
+
+                        sendMsg(s, CALCULATE, keyboardBuff + 10);
 
                     };
 
@@ -184,7 +191,7 @@ void chatHandler(SOCKET s, char* username) {
                     pthread_mutex_lock(&printfMutex);
 
                     moveCurs(currentRow, 0);
-                    printf("[%s has joined the lobby]", inputBuf + 1);
+                    printf("[%s has joined the lobby]\n", inputBuf + 1);
 
                     for (int i = 0; i < keyboardBuffLen; i++)
                         printf(" ");
@@ -228,12 +235,12 @@ void chatHandler(SOCKET s, char* username) {
 
                 }
                 break;
-                case CLIEND_DISCONNECTED_MSG:
+                case CLIENT_DISCONNECTED_MSG:
 
                     pthread_mutex_lock(&printfMutex);
 
                     moveCurs(currentRow, 0);
-                    printf("[%s has left the lobby]", inputBuf + 1);
+                    printf("[%s has left the lobby]\n", inputBuf + 1);
 
                     for (int i = 0; i < keyboardBuffLen; i++)
                         printf(" ");
