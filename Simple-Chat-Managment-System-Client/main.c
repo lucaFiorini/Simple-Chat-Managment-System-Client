@@ -66,19 +66,13 @@ enum CommType {
 
 void sendMsg(SOCKET *s, enum CommType req,unsigned char * msg) {
     
+
+
 }
 
 int update;
 int keyboardBuffLen = 0;
 char keyboardBuff[DEFAULT_BUFLEN];
-
-int getch_noblock() {
-    if (_kbhit())
-        return _getch();
-    else
-        return -1;
-
-}
 
 void safePrint(int row,int col, char* str) {
     static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -92,7 +86,7 @@ void* deferredInput(void * sin) {
     SOCKET s = *(SOCKET*)sin;
     while (1) {
         
-        char c = getch_noblock();
+        char c = getch();
         if (c != -1 && keyboardBuffLen < DEFAULT_BUFLEN-1) {
             switch (c) {
             case '\n':
@@ -101,8 +95,12 @@ void* deferredInput(void * sin) {
                 keyboardBuff[0] = '\0';
                 break;
             case 127: case 8: //backspace
-                keyboardBuff[--keyboardBuffLen] = 0;
-                printf("%c",c);
+                if (keyboardBuffLen > 0) {
+
+                    keyboardBuff[--keyboardBuffLen] = 0;
+                    printf("%c", c);
+
+                }
                 break;
             default:
                 keyboardBuff[keyboardBuffLen++] = c;
@@ -122,7 +120,8 @@ void chatHandler(SOCKET s, char* username) {
     
     unsigned char inputBuf[DEFAULT_BUFLEN];
     do {
-
+        printf("[SERVER ERROR] ");
+        printf("socket failed with error: %ld\n", WSAGetLastError());
         int iRecv = recv(s, inputBuf, DEFAULT_BUFLEN, &s);
         if (iRecv > 0) {
             enum CommType type = inputBuf[0];
@@ -142,7 +141,7 @@ void chatHandler(SOCKET s, char* username) {
             return;
         }
         else if (iRecv < 0) {
-            printf("[SERVER ERROR]");
+            printf("[SERVER ERROR] ");
             printf("socket failed with error: %ld\n", WSAGetLastError());
             closesocket(s);
             return;
@@ -300,19 +299,6 @@ int __cdecl main(int argc, unsigned char** argv){
     
     }
 
-    //printf("Bytes Sent: %ld\n", iResult);
-
-    // shutdown the connection since no more data will be sent
-    iResult = shutdown(ConnectSocket, SD_SEND);
-    if (iResult == SOCKET_ERROR) {
-
-        printf("shutdown failed with error: %d\n", WSAGetLastError());
-        closesocket(ConnectSocket);
-        WSACleanup();
-        return 1;
-    
-    }
-
     if (action == LOBBY_LIST)
         printf("Lobby code \t Connected Clients\n");
 
@@ -336,17 +322,20 @@ int __cdecl main(int argc, unsigned char** argv){
             if (action == JOIN_LOBBY) {
 
                 if (t == OK) {
+
                     printf("You have joined lobby %s\n", argv[3]);
                     chatHandler(ConnectSocket, argv[4]);
                     closesocket(ConnectSocket);
                     WSACleanup();
                     return;
-                }
-                else if (t == INVALID_CODE) {
+                
+                } else if (t == INVALID_CODE) {
+
                     printf("Lobby %s not found in server\n", argv[3]);
                     closesocket(ConnectSocket);
                     WSACleanup();
                     return;
+
                 }
                 else if (t == LOBBY_FULL) {
                     printf("Lobby %s is full\n", argv[3]);
